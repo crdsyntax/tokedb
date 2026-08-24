@@ -1,0 +1,6 @@
+/target
+tokedb-runtime/.db-runtime
+IMPLEMENTATION_PLAN.md
+.opencode/
+.cargo/
+notes.md
