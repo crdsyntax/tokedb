@@ -4,3 +4,6 @@ IMPLEMENTATION_PLAN.md
 .opencode/
 .cargo/
 notes.md
+frontend/node_modules
+frontend/.env.local
+frontend/dist
