@@ -12,7 +12,7 @@ pub mod isolation;
 pub mod network;
 pub mod platform;
 pub mod runtime;
-#[cfg(any(not(windows), test))]
+#[cfg(any(not(windows), test, feature = "gui"))]
 pub mod service;
 pub mod state;
 pub mod storage;
