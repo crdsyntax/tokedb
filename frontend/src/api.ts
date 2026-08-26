@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { Container, ContainerLogs, ImageSummary, Volume, EngineInfo } from "./types";
+import type { Container, ContainerLogs, ImageSummary, Volume, EngineInfo, ResourceUsage } from "./types";
 
 export const api = {
   // Containers
@@ -8,6 +8,7 @@ export const api = {
   createContainer: (
     name: string,
     image: string,
+    dbUser: { username: string; password: string },
     opts: { memory_mb?: number; cpu_quota?: number; pids_max?: number; ports?: string[] } = {}
   ) =>
     invoke<Container>("create_container", {
@@ -17,11 +18,14 @@ export const api = {
       cpuQuota: opts.cpu_quota ?? null,
       pidsMax: opts.pids_max ?? null,
       ports: opts.ports ?? [],
+      username: dbUser.username,
+      password: dbUser.password,
     }),
   startContainer: (name: string) => invoke<void>("start_container", { name }),
   stopContainer: (name: string) => invoke<void>("stop_container", { name }),
   destroyContainer: (name: string) => invoke<void>("destroy_container", { name }),
   readLogs: (name: string) => invoke<ContainerLogs>("read_logs", { name }),
+  containerStats: (name: string) => invoke<ResourceUsage>("container_stats", { name }),
 
   // Images
   listImages: () => invoke<ImageSummary[]>("list_images"),

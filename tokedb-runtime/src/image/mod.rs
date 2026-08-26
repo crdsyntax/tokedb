@@ -8,3 +8,5 @@ mod layers;
 pub use manifest::{Architecture, Healthcheck, ImageManifest, LayerRef};
 pub use reference::{join_reference, parse_reference, valid_name, valid_tag};
 pub use storage::{Image, ImageStore, ImageSummary};
+
+pub use layers::{is_valid_digest, layer_hex};

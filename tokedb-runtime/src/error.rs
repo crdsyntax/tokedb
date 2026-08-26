@@ -45,6 +45,8 @@ pub enum RuntimeError {
     ImageNotFound { reference: String },
     #[error("image `{reference}` already exists")]
     ImageAlreadyExists { reference: String },
+    #[error("image `{reference}` is in use by one or more containers")]
+    ImageInUse { reference: String },
     #[error("invalid reference `{reference}`: {reason}")]
     InvalidReference {
         reference: String,

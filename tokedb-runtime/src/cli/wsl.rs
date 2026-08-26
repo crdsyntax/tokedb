@@ -1,8 +1,8 @@
-//! Windows-to-WSL2 delegation: the Windows CLI is a thin client that
-//! forwards every command to a tokedb binary inside a WSL2 distro, so
-//! `start`/`stop`/`logs` behave exactly like they do on Linux. The Linux
-//! binary owns all state; the Windows side only translates the working
-//! directory and `TOKEDB_DATA_ROOT` into `/mnt/...` paths.
+
+
+
+
+
 
 use std::path::Path;
 
@@ -67,8 +67,8 @@ pub fn run_via_wsl(argv: &[String]) -> Result<()> {
     }
 }
 
-/// Converts an absolute Windows path (`C:\foo\bar`) into its WSL form
-/// (`/mnt/c/foo/bar`). UNC paths are rejected.
+
+
 pub fn to_unix_path(path: &Path) -> Result<String> {
     let raw = path.to_string_lossy();
     if raw.starts_with("\\\\") {
@@ -91,11 +91,11 @@ fn shell_quote(arg: &str) -> String {
     format!("'{}'", arg.replace('\'', "'\\''"))
 }
 
-/// Translates Windows paths in a command-line argument into their WSL form.
-/// Absolute drive paths (`C:\...`) map straight to `/mnt/c/...`; relative
-/// paths containing backslashes are joined with the Windows working
-/// directory first. References (`mariadb:11.4`), URLs and plain names pass
-/// through untouched.
+
+
+
+
+
 fn translate_arg(arg: &str, cwd: &Path) -> String {
     let bytes = arg.as_bytes();
     if bytes.len() >= 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic() {

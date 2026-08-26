@@ -16,7 +16,7 @@ pub fn attach_container(bridge: &str, host_pid: u32, id: &str) -> Result<String>
     netlink::create_veth_pair(&veth, &peer)?;
     let outcome = attach_impl(bridge, host_pid, &veth, &peer, &ip);
     if outcome.is_err() {
-        // Don't leak the host veth when the attach failed midway.
+        
         let _ = netlink::delete_link(&veth);
     }
     outcome

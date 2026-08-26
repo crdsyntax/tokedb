@@ -16,7 +16,7 @@ use crate::service::{CreateRequest, RuntimeService};
 
 static INTERRUPT: AtomicBool = AtomicBool::new(false);
 
-/// Labels of background tasks still running (detached start); drained on exit.
+
 static PENDING: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
@@ -77,8 +77,8 @@ fn run_repl(service: &RuntimeService) -> Result<()> {
     Ok(())
 }
 
-/// Runs a `;`-separated script through the same parser as the interactive
-/// console; stops at the first error and propagates it (typed exit code).
+
+
 fn run_batch(service: &RuntimeService, script: &str) -> Result<()> {
     for raw in split_commands(script) {
         let command = raw.trim();
@@ -93,8 +93,8 @@ fn run_batch(service: &RuntimeService, script: &str) -> Result<()> {
     Ok(())
 }
 
-/// Reads command lines from stdin when the console is piped (non-TTY),
-/// reusing the same parser and errors as the interactive console.
+
+
 fn run_stdin_batch(service: &RuntimeService) -> Result<()> {
     use std::io::BufRead;
     for line in std::io::stdin().lock().lines() {
@@ -114,8 +114,8 @@ fn run_stdin_batch(service: &RuntimeService) -> Result<()> {
     Ok(())
 }
 
-/// Splits a script on `;` outside double quotes, returning trimmed non-empty
-/// commands.
+
+
 fn split_commands(input: &str) -> Vec<String> {
     let mut commands = Vec::new();
     let mut current = String::new();
@@ -232,8 +232,8 @@ fn use_color() -> bool {
     std::io::stdout().is_terminal()
 }
 
-/// Runs a bounded blocking operation on a background thread, animating a
-/// spinner while it completes. Non-TTY output degrades to `title ...`.
+
+
 fn spinner_wait<T: Send + 'static>(
     title: &str,
     op: impl FnOnce() -> Result<T> + Send + 'static,
@@ -273,10 +273,10 @@ fn spinner_wait<T: Send + 'static>(
     }
 }
 
-/// Runs an unbounded operation (e.g. a foreground `start`) on a detached
-/// thread; the prompt returns immediately and the outcome is reported when the
-/// task finishes. Exit-time process teardown kills in-flight container
-/// processes via `kill_on_parent_exit`, so nothing is orphaned.
+
+
+
+
 fn run_detached(label: String, op: impl FnOnce() -> Result<()> + Send + 'static) {
     PENDING
         .lock()
@@ -387,6 +387,10 @@ fn run_create(service: &RuntimeService, tokens: &[String]) -> Result<Outcome> {
         ports,
         env: Vec::new(),
         args: Vec::new(),
+        db_user: crate::service::DbUser {
+            username: "admin".into(),
+            password: "admin".into(),
+        },
     })?;
     println!(
         "created container `{}` (id {}) with data volume `{}-data`",

@@ -18,8 +18,9 @@ use tokedb_runtime::image::{Architecture, ImageStore};
 use tokedb_runtime::runtime::container::ContainerSpec;
 use tokedb_runtime::runtime::lifecycle::ContainerState;
 use tokedb_runtime::runtime::{run, ContainerStore, ResourceLimits, VolumeMount};
+use tokedb_runtime::service::RuntimeService;
 use tokedb_runtime::state::StateLayout;
-use tokedb_runtime::storage::VolumeStore;
+use tokedb_runtime::storage::{LayerStore, VolumeStore};
 
 /// All containers share the 10.20.0.0/24 subnet, so tests touching the
 /// network stack must not run concurrently with each other.
@@ -77,6 +78,14 @@ impl TestEnv {
 
     fn volumes(&self) -> VolumeStore {
         VolumeStore::new(self.config.volumes_dir.clone())
+    }
+
+    fn layers(&self) -> LayerStore {
+        LayerStore::new(self.config.layers_dir.clone())
+    }
+
+    fn service(&self) -> RuntimeService {
+        RuntimeService::new(self.config.clone())
     }
 
     fn layout(&self) -> StateLayout {
@@ -222,6 +231,7 @@ fn start_runs_command_and_persists_logs_and_volume() {
         &env.containers(),
         &env.images(),
         &env.volumes(),
+        &env.layers(),
         &env.layout(),
         "t1",
     )
@@ -260,6 +270,7 @@ fn stop_terminates_running_container() {
             &ContainerStore::new(layout.clone()),
             &ImageStore::new(config.images_dir.clone()),
             &VolumeStore::new(config.volumes_dir.clone()),
+            &LayerStore::new(config.layers_dir.clone()),
             &layout,
             "t2",
         )
@@ -289,6 +300,7 @@ fn published_port_is_reachable_while_running() {
             &ContainerStore::new(layout.clone()),
             &ImageStore::new(config.images_dir.clone()),
             &VolumeStore::new(config.volumes_dir.clone()),
+            &LayerStore::new(config.layers_dir.clone()),
             &layout,
             "t3",
         )
@@ -321,4 +333,40 @@ fn published_port_is_reachable_while_running() {
 
     let container = env.containers().find("t3").unwrap();
     assert_eq!(container.state, ContainerState::Stopped);
+}
+
+#[test]
+fn layers_are_shared_across_containers_and_reclaimed_on_destroy() {
+    let _guard = guard();
+    let env = TestEnv::new("exec true");
+    env.create("a", &[]);
+    env.create("b", &[]);
+
+    let service = env.service();
+    service.start("a").unwrap();
+    service.start("b").unwrap();
+
+    let materialized: Vec<_> = fs::read_dir(&env.config.layers_dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .collect();
+    assert_eq!(
+        materialized.len(),
+        1,
+        "the image's single layer must be materialized once and shared"
+    );
+    let layer_dir = materialized[0].path();
+    assert!(layer_dir.join("diff").join("db.txt").is_file());
+
+    service.destroy("a").unwrap();
+    assert!(
+        layer_dir.exists(),
+        "shared layer must persist while another container still references it"
+    );
+
+    service.destroy("b").unwrap();
+    assert!(
+        !layer_dir.exists(),
+        "layer must be reclaimed once no container references it"
+    );
 }

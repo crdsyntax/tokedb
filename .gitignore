@@ -1,5 +1,7 @@
 /target
 tokedb-runtime/.db-runtime
+src-tauri/.db-runtime
+*.tsbuildinfo
 IMPLEMENTATION_PLAN.md
 .opencode/
 .cargo/

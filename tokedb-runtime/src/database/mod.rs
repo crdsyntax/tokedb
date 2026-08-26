@@ -4,6 +4,9 @@ pub mod mariadb;
 pub mod mongodb;
 pub mod mysql;
 pub mod postgres;
+pub mod redis;
+pub mod sql;
+pub mod sqlite;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DatabaseSpec {
@@ -22,6 +25,9 @@ pub fn all() -> &'static [DatabaseSpec] {
         crate::database::mysql::SPEC,
         crate::database::postgres::SPEC,
         crate::database::mongodb::SPEC,
+        crate::database::redis::SPEC,
+        crate::database::sqlite::SPEC,
+        crate::database::sql::SPEC,
     ]
 }
 
@@ -30,7 +36,7 @@ pub fn for_engine(engine: &str) -> Option<DatabaseSpec> {
 }
 
 pub fn engines() -> &'static [&'static str] {
-    &["mariadb", "mysql", "postgres", "mongodb"]
+    &["mariadb", "mysql", "postgres", "mongodb", "redis", "sqlite", "sql"]
 }
 
 #[cfg(test)]

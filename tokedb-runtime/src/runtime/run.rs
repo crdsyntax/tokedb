@@ -1,6 +1,6 @@
-//! Execution layer: turns a stored container spec plus its image into a
-//! running, isolated database process. Streams logs to the container's state
-//! directory and drives the container state machine through start/stop.
+
+
+
 
 use std::fs;
 use std::io;
@@ -13,17 +13,17 @@ use crate::network::{PortMap, PortProtocol};
 use crate::runtime::process::CommandSpec;
 use crate::runtime::{ContainerStore, PortBinding, Protocol};
 use crate::state::StateLayout;
-use crate::storage::VolumeStore;
+use crate::storage::{LayerStore, VolumeStore};
 
 #[cfg(target_os = "linux")]
 use std::io::{Read, Write};
 #[cfg(target_os = "linux")]
 use std::path::PathBuf;
+#[cfg(target_os = "linux")]
+use std::process::Command;
 
 #[cfg(target_os = "linux")]
-use crate::filesystem::{unpack_layer, MountSpec, OverlaySpec, RootfsPrep};
-#[cfg(target_os = "linux")]
-use crate::image::Image;
+use crate::filesystem::{MountSpec, OverlaySpec, RootfsPrep};
 #[cfg(target_os = "linux")]
 use crate::isolation::{CgroupManager, ResourceLimits as CgroupLimits};
 #[cfg(target_os = "linux")]
@@ -35,11 +35,12 @@ use crate::network::{
 };
 #[cfg(target_os = "linux")]
 use crate::runtime::{
+    container::DbUser,
     process::{spawn_with_prep, ProcessSignal, SpawnedProcess},
     Container, ContainerState,
 };
 
-/// The database process runs as this unprivileged user inside the container.
+
 const CONTAINER_UID: u32 = 999;
 const CONTAINER_GID: u32 = 999;
 
@@ -49,8 +50,8 @@ const LOG_DIR: &str = "logs";
 const STDOUT_LOG: &str = "stdout.log";
 const STDERR_LOG: &str = "stderr.log";
 
-/// Captured stdout and stderr of a container.
-#[derive(Debug, Clone, Default, serde::Serialize)]
+
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct ContainerLogs {
     pub stdout: String,
     pub stderr: String,
@@ -61,9 +62,9 @@ const STOP_GRACE_SECS: u64 = 10;
 #[cfg(target_os = "linux")]
 const KILL_GRACE_SECS: u64 = 5;
 
-/// Read-only host paths made visible inside every container so database
-/// binaries and their dynamic dependencies can run. The database program
-/// itself comes from the image layers.
+
+
+
 #[cfg(target_os = "linux")]
 const SYSTEM_BIND_DIRS: &[&str] = &[
     "/bin",
@@ -76,9 +77,9 @@ const SYSTEM_BIND_DIRS: &[&str] = &[
     "/lib64",
 ];
 
-/// Security profile applied to every container process: no-new-privs, a
-/// default capability allowlist, the seccomp denylist, and a drop to an
-/// unprivileged database user.
+
+
+
 pub fn container_security() -> SecurityProfile {
     SecurityProfile {
         capabilities: default_allowlist(),
@@ -90,9 +91,9 @@ pub fn container_security() -> SecurityProfile {
     }
 }
 
-/// Builds the runtime command for a container from the image's startup
-/// command, wrapped in the container security profile and its own network
-/// namespace.
+
+
+
 pub fn command_from_image(manifest: &ImageManifest) -> CommandSpec {
     let mut parts = manifest.startup_command.iter();
     let mut spec = CommandSpec::new(parts.next().map(String::as_str).unwrap_or("/bin/sh"));
@@ -102,8 +103,8 @@ pub fn command_from_image(manifest: &ImageManifest) -> CommandSpec {
     spec.security(container_security()).netns(true)
 }
 
-/// Parses a `HOST:CONTAINER` port binding; a bare `PORT` binds the same port
-/// on both sides.
+
+
 pub fn parse_port_binding(input: &str) -> Result<PortBinding> {
     let (host, container) = match input.split_once(':') {
         Some((host, container)) => (host, container),
@@ -129,7 +130,7 @@ pub fn parse_port_binding(input: &str) -> Result<PortBinding> {
     })
 }
 
-/// Converts stored port bindings into bridge proxy maps.
+
 pub fn port_maps(ports: &[PortBinding]) -> Vec<PortMap> {
     ports
         .iter()
@@ -144,7 +145,7 @@ pub fn port_maps(ports: &[PortBinding]) -> Vec<PortMap> {
         .collect()
 }
 
-/// Prints the container's captured stdout and stderr.
+
 pub fn logs(containers: &ContainerStore, layout: &StateLayout, name: &str) -> Result<()> {
     let container = containers.find(name)?;
     let logs_dir = layout.container_dir(&container.id)?.join(LOG_DIR);
@@ -166,8 +167,8 @@ fn print_log_file(path: &Path) -> Result<()> {
     }
 }
 
-/// Reads the container's captured stdout and stderr as text, missing files
-/// treated as empty. Used by the console for live log following.
+
+
 pub fn read_logs(
     containers: &ContainerStore,
     layout: &StateLayout,
@@ -185,28 +186,29 @@ fn read_log_content(path: &Path) -> String {
     fs::read_to_string(path).unwrap_or_default()
 }
 
-/// Starts the container in the foreground: builds the rootfs, wires up
-/// network and cgroups, spawns the database process, streams its output to
-/// the container logs, and blocks until it exits.
+
+
+
 pub fn start(
     containers: &ContainerStore,
     images: &ImageStore,
     volumes: &VolumeStore,
+    layers: &LayerStore,
     layout: &StateLayout,
     name: &str,
 ) -> Result<()> {
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = (containers, images, volumes, layout, name);
+        let _ = (containers, images, volumes, layers, layout, name);
         Err(RuntimeError::UnsupportedPlatform("start"))
     }
     #[cfg(target_os = "linux")]
     {
-        start_impl(containers, images, volumes, layout, name)
+        start_impl(containers, images, volumes, layers, layout, name)
     }
 }
 
-/// Stops a running container: SIGTERM, then SIGKILL after the grace period.
+
 pub fn stop(containers: &ContainerStore, name: &str) -> Result<()> {
     #[cfg(not(target_os = "linux"))]
     {
@@ -219,11 +221,159 @@ pub fn stop(containers: &ContainerStore, name: &str) -> Result<()> {
     }
 }
 
+
+
+
+#[cfg(target_os = "linux")]
+fn init_user_sql(engine: &str, user: &DbUser) -> Option<String> {
+    if user.username.trim().is_empty() || user.password.is_empty() {
+        return None;
+    }
+    match engine {
+        "mariadb" | "mysql" => {
+            let u = sql_literal(&user.username);
+            let p = sql_literal(&user.password);
+            Some(format!(
+                "CREATE USER IF NOT EXISTS '{u}'@'%' IDENTIFIED BY '{p}';\n\
+                 ALTER USER '{u}'@'%' IDENTIFIED BY '{p}';\n\
+                 GRANT ALL PRIVILEGES ON *.* TO '{u}'@'%' WITH GRANT OPTION;\n\
+                 FLUSH PRIVILEGES;\n"
+            ))
+        }
+        _ => None,
+    }
+}
+
+
+#[cfg(target_os = "linux")]
+fn sql_literal(value: &str) -> String {
+    value.replace('\'', "''")
+}
+
+
+
+
+
+
+#[cfg(target_os = "linux")]
+fn engine_init_spec(
+    engine: &str,
+) -> Option<(&'static str, Vec<String>, &'static str)> {
+    match engine {
+        "mariadb" => Some((
+            "mariadb-install-db",
+            vec![
+                "--user=root".to_string(),
+                "--auth-root-authentication-method=normal".to_string(),
+            ],
+            "mysql",
+        )),
+        "mysql" => Some((
+            "mysql_install_db",
+            vec!["--user=root".to_string()],
+            "mysql",
+        )),
+        _ => None,
+    }
+}
+
+
+
+
+
+#[cfg(target_os = "linux")]
+fn maybe_init_data_directory(engine: &str, host_path: &Path) -> Result<()> {
+    let Some((bin, mut args, marker)) = engine_init_spec(engine) else {
+        return Ok(());
+    };
+    if host_path.join(marker).exists() {
+        return Ok(());
+    }
+    
+    
+    
+    if dir_has_content(host_path)? {
+        eprintln!("data directory at {path} not initialized; clearing partial contents", path = host_path.display());
+        clear_dir(host_path)?;
+    }
+    let datadir = host_path
+        .to_str()
+        .ok_or_else(|| RuntimeError::InvalidConfig(format!("ruta inválida: {host_path:?}")))?;
+    
+    
+    
+    
+    args.push(format!("--datadir={datadir}"));
+    eprintln!("initializing {engine} data directory at {datadir}");
+    let status = Command::new(bin)
+        .args(&args)
+        .status()
+        .map_err(|err| RuntimeError::Process(format!("no se pudo ejecutar `{bin}`: {err}")))?;
+    if !status.success() {
+        return Err(RuntimeError::Process(format!(
+            "`{bin}` falló al inicializar el data directory (estado {status})"
+        )));
+    }
+    Ok(())
+}
+
+
+
+#[cfg(target_os = "linux")]
+fn dir_has_content(path: &Path) -> Result<bool> {
+    let mut entries = fs::read_dir(path).map_err(|err| RuntimeError::Io {
+        path: path.display().to_string(),
+        message: err.to_string(),
+    })?;
+    while let Some(entry) = entries.next() {
+        let entry = entry.map_err(|err| RuntimeError::Io {
+            path: path.display().to_string(),
+            message: err.to_string(),
+        })?;
+        if entry.file_name() != "lost+found" {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+
+
+#[cfg(target_os = "linux")]
+fn clear_dir(path: &Path) -> Result<()> {
+    let mut entries = fs::read_dir(path).map_err(|err| RuntimeError::Io {
+        path: path.display().to_string(),
+        message: err.to_string(),
+    })?;
+    while let Some(entry) = entries.next() {
+        let entry = entry.map_err(|err| RuntimeError::Io {
+            path: path.display().to_string(),
+            message: err.to_string(),
+        })?;
+        let target = entry.path();
+        
+        if entry.file_name() == std::ffi::OsStr::new(".tokedb-volume") {
+            continue;
+        }
+        if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
+            fs::remove_dir_all(&target)
+        } else {
+            fs::remove_file(&target)
+        }
+        .map_err(|err| RuntimeError::Io {
+            path: target.display().to_string(),
+            message: err.to_string(),
+        })?;
+    }
+    Ok(())
+}
+
 #[cfg(target_os = "linux")]
 fn start_impl(
     containers: &ContainerStore,
     images: &ImageStore,
     volumes: &VolumeStore,
+    layers: &LayerStore,
     layout: &StateLayout,
     name: &str,
 ) -> Result<()> {
@@ -234,13 +384,32 @@ fn start_impl(
     let image = images.get(&container.image)?;
     let container_dir = layout.container_dir(&container.id)?;
 
+    
+    
+    
+    
+    let mut lower_layers: Vec<PathBuf> = Vec::with_capacity(image.manifest.layers.len());
+    let mut newly_acquired: Vec<String> = Vec::new();
+    for (layer_ref, tar_gz) in image.manifest.layers.iter().zip(image.layers.iter()) {
+        let digest = layer_ref.digest.clone();
+        if !container.acquired_layers.contains(&digest) {
+            layers.ensure(&digest, tar_gz)?;
+            newly_acquired.push(digest.clone());
+        }
+        lower_layers.push(layers.diff_path(&digest)?);
+    }
+    if !newly_acquired.is_empty() {
+        container.acquired_layers.extend(newly_acquired);
+        containers.save(&container)?;
+    }
+
     let mut spec = container.command.clone();
     spec.security = Some(container_security());
     spec.netns = true;
     spec.kill_on_parent_exit = true;
     spec.cwd = Some(PathBuf::from("/"));
 
-    let mut prep = build_rootfs(&image, &container_dir)?;
+    let mut prep = build_rootfs(&lower_layers, &container_dir)?;
     prep.bind_mounts.extend(system_bind_mounts());
     for mount in &container.volumes {
         let volume = volumes.get(&mount.name)?;
@@ -248,7 +417,35 @@ fn start_impl(
             .push(volume.mount_spec(PathBuf::from(&mount.mount_path), false));
     }
 
-    // Let the unprivileged database user write into the writable layers.
+    
+    
+    
+    
+    let mut init_file_arg: Option<String> = None;
+    for mount in &container.volumes {
+        if mount.mount_path == image.manifest.data_directory {
+            let volume = volumes.get(&mount.name)?;
+            maybe_init_data_directory(&image.manifest.database, &volume.path)?;
+            
+            
+            
+            
+            if let Some(sql) = init_user_sql(&image.manifest.database, &container.db_user) {
+                let host_file = volume.path.join("tokedb-init.sql");
+                fs::write(&host_file, sql).map_err(|err| RuntimeError::Io {
+                    path: host_file.display().to_string(),
+                    message: err.to_string(),
+                })?;
+                init_file_arg =
+                    Some(format!("--init-file={}/tokedb-init.sql", mount.mount_path));
+            }
+        }
+    }
+    if let Some(arg) = init_file_arg {
+        spec.args.push(arg);
+    }
+
+    
     for dir in [&prep.overlay.upper_dir, &prep.overlay.work_dir] {
         chown_tree(dir, CONTAINER_UID, CONTAINER_GID)?;
     }
@@ -284,9 +481,9 @@ fn start_impl(
             let _ = containers.save(&container);
             return Err(err);
         }
-        // The container already exited before its network was wired up
-        // (e.g. a one-shot startup command). Skip network setup and let the
-        // process be reaped normally.
+        
+        
+        
         eprintln!("warning: container `{name}` exited before network setup; skipping");
         cleanup(&mut network, &mut cgroup, &container.id);
     }
@@ -331,8 +528,8 @@ struct CgroupSetup {
     enabled: bool,
 }
 
-/// Attaches the container to the bridge, publishes its ports, and applies
-/// resource limits through cgroups.
+
+
 #[cfg(target_os = "linux")]
 fn wire_up(
     bridge: &str,
@@ -380,10 +577,12 @@ fn cleanup(network: &mut NetworkSetup, cgroup: &mut CgroupSetup, container_id: &
     }
 }
 
-/// Materializes the image layers into `container_dir/rootfs` and returns the
-/// overlay+bind prep used to build the container's view of the filesystem.
+
+
+
+
 #[cfg(target_os = "linux")]
-fn build_rootfs(image: &Image, container_dir: &Path) -> Result<RootfsPrep> {
+fn build_rootfs(lower_layers: &[PathBuf], container_dir: &Path) -> Result<RootfsPrep> {
     let rootfs = container_dir.join(ROOTFS_DIR);
     if rootfs.exists() {
         fs::remove_dir_all(&rootfs).map_err(|err| RuntimeError::Io {
@@ -396,20 +595,9 @@ fn build_rootfs(image: &Image, container_dir: &Path) -> Result<RootfsPrep> {
         message: err.to_string(),
     })?;
 
-    let mut lower_layers = Vec::with_capacity(image.layers.len());
-    for (index, layer) in image.layers.iter().enumerate() {
-        let lower = rootfs.join(format!("lower{index}"));
-        fs::create_dir_all(&lower).map_err(|err| RuntimeError::Io {
-            path: lower.display().to_string(),
-            message: err.to_string(),
-        })?;
-        unpack_layer(layer, &lower)?;
-        lower_layers.push(lower);
-    }
-
     Ok(RootfsPrep {
         overlay: OverlaySpec {
-            lower_layers,
+            lower_layers: lower_layers.to_vec(),
             upper_dir: rootfs.join("upper"),
             work_dir: rootfs.join("work"),
             target: rootfs.join("merged"),
@@ -431,7 +619,7 @@ fn system_bind_mounts() -> Vec<MountSpec> {
         .collect()
 }
 
-/// Recursively changes ownership of a directory tree, skipping symlinks.
+
 #[cfg(target_os = "linux")]
 fn chown_tree(path: &Path, uid: u32, gid: u32) -> Result<()> {
     use std::os::unix::fs::chown;
@@ -461,8 +649,8 @@ fn chown_tree(path: &Path, uid: u32, gid: u32) -> Result<()> {
     chown(path, Some(uid), Some(gid)).map_err(RuntimeError::from)
 }
 
-/// Copies a container output pipe to its log file, mirroring it to the CLI
-/// (stdout for stdout, stderr for stderr) while the container runs.
+
+
 #[cfg(target_os = "linux")]
 fn stream_pipe(reader: impl Read + Send + 'static, log_path: PathBuf, to_stderr: bool) {
     let file = match fs::OpenOptions::new()

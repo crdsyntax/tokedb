@@ -10,6 +10,7 @@ const ENV_DATA_ROOT: &str = "TOKEDB_DATA_ROOT";
 pub struct RuntimeConfig {
     pub data_root: PathBuf,
     pub images_dir: PathBuf,
+    pub layers_dir: PathBuf,
     pub containers_dir: PathBuf,
     pub volumes_dir: PathBuf,
     pub bridge_name: String,
@@ -18,11 +19,13 @@ pub struct RuntimeConfig {
 impl RuntimeConfig {
     pub fn new(data_root: PathBuf) -> Self {
         let images_dir = data_root.join("images");
+        let layers_dir = data_root.join("layers");
         let containers_dir = data_root.join("containers");
         let volumes_dir = data_root.join("volumes");
         RuntimeConfig {
             data_root,
             images_dir,
+            layers_dir,
             containers_dir,
             volumes_dir,
             bridge_name: DEFAULT_BRIDGE.to_string(),

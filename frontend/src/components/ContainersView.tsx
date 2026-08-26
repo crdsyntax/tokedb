@@ -1,6 +1,17 @@
-import { useState } from "react";
-import type { Container, ImageSummary } from "../types";
+import { useEffect, useState } from "react";
+import type { Container, ImageSummary, ResourceUsage } from "../types";
 import { api } from "../api";
+
+function formatBytes(bytes: number): string {
+  if (!bytes) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  const exp = Math.min(
+    Math.floor(Math.log(bytes) / Math.log(1024)),
+    units.length - 1
+  );
+  const value = bytes / Math.pow(1024, exp);
+  return `${value.toFixed(exp === 0 ? 0 : 1)} ${units[exp]}`;
+}
 
 interface Props {
   containers: Container[];
@@ -37,21 +48,71 @@ export function ContainersView({ containers, images, onRefresh }: Props) {
   const [newMemory, setNewMemory] = useState("");
   const [newCpu, setNewCpu] = useState("");
   const [newPort, setNewPort] = useState("");
+  const [newDbUser, setNewDbUser] = useState("");
+  const [newDbPassword, setNewDbPassword] = useState("");
+
+  // Live resource usage per running container, polled from the backend.
+  const [stats, setStats] = useState<Record<string, ResourceUsage>>({});
+  useEffect(() => {
+    let cancelled = false;
+    const tick = async () => {
+      const running = containers.filter((c) => c.state === "running");
+      if (running.length === 0) {
+        setStats({});
+        return;
+      }
+      const results = await Promise.all(
+        running.map(async (c) => {
+          try {
+            const usage = await api.containerStats(c.name);
+            return [c.name, usage] as const;
+          } catch {
+            return null;
+          }
+        })
+      );
+      if (cancelled) return;
+      const next: Record<string, ResourceUsage> = {};
+      for (const entry of results) {
+        if (entry) next[entry[0]] = entry[1];
+      }
+      setStats(next);
+    };
+    tick();
+    const id = setInterval(tick, 2000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [containers]);
+
+  const canCreate =
+    newName.trim() !== "" &&
+    newImage !== "" &&
+    newDbUser.trim() !== "" &&
+    newDbPassword !== "";
 
   const handleCreate = async () => {
-    if (!newName || !newImage) return;
+    if (!canCreate) return;
     try {
-      await api.createContainer(newName, newImage, {
-        memory_mb: newMemory ? parseInt(newMemory) : undefined,
-        cpu_quota: newCpu ? parseFloat(newCpu) : undefined,
-        ports: newPort ? [newPort] : undefined,
-      });
+      await api.createContainer(
+        newName,
+        newImage,
+        { username: newDbUser.trim(), password: newDbPassword },
+        {
+          memory_mb: newMemory ? parseInt(newMemory) : undefined,
+          cpu_quota: newCpu ? parseFloat(newCpu) : undefined,
+          ports: newPort ? [newPort] : undefined,
+        }
+      );
       setShowCreate(false);
       setNewName("");
       setNewImage("");
       setNewMemory("");
       setNewCpu("");
       setNewPort("");
+      setNewDbUser("");
+      setNewDbPassword("");
       onRefresh();
     } catch (e: any) {
       setError(String(e));
@@ -168,8 +229,38 @@ export function ContainersView({ containers, images, onRefresh }: Props) {
               />
             </div>
           </div>
+          <div className="border-t border-dark-600 pt-3">
+            <p className="text-xs text-dark-300 mb-2">
+              Credenciales de la base de datos <span className="text-red-400">*</span> (obligatorias para acceso remoto)
+            </p>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs text-dark-400 mb-1 block">Usuario *</label>
+                <input
+                  className="input w-full"
+                  placeholder="mi_usuario"
+                  value={newDbUser}
+                  onChange={(e) => setNewDbUser(e.target.value)}
+                />
+              </div>
+              <div>
+                <label className="text-xs text-dark-400 mb-1 block">Contraseña *</label>
+                <input
+                  className="input w-full"
+                  type="password"
+                  placeholder="••••••••"
+                  value={newDbPassword}
+                  onChange={(e) => setNewDbPassword(e.target.value)}
+                />
+              </div>
+            </div>
+          </div>
           <div className="flex gap-2">
-            <button onClick={handleCreate} className="btn-primary">
+            <button
+              onClick={handleCreate}
+              disabled={!canCreate}
+              className="btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
+            >
               Crear
             </button>
             <button onClick={() => setShowCreate(false)} className="btn-ghost">
@@ -195,6 +286,8 @@ export function ContainersView({ containers, images, onRefresh }: Props) {
                 <th className="text-left px-4 py-2">Nombre</th>
                 <th className="text-left px-4 py-2">Imagen</th>
                 <th className="text-left px-4 py-2">Estado</th>
+                <th className="text-left px-4 py-2">CPU</th>
+                <th className="text-left px-4 py-2">Memoria</th>
                 <th className="text-left px-4 py-2">Puertos</th>
                 <th className="text-left px-4 py-2">PID</th>
                 <th className="text-right px-4 py-2">Acciones</th>
@@ -220,6 +313,16 @@ export function ContainersView({ containers, images, onRefresh }: Props) {
                   </td>
                   <td className="px-4 py-2.5">
                     <span className={stateColors[c.state]}>{c.state}</span>
+                  </td>
+                  <td className="px-4 py-2.5 text-xs text-dark-300 font-mono">
+                    {c.state === "running" && stats[c.name]
+                      ? `${stats[c.name].cpu_percent.toFixed(1)}%`
+                      : "—"}
+                  </td>
+                  <td className="px-4 py-2.5 text-xs text-dark-300 font-mono">
+                    {c.state === "running" && stats[c.name]
+                      ? formatBytes(stats[c.name].memory_bytes)
+                      : "—"}
                   </td>
                   <td className="px-4 py-2.5 text-xs text-dark-300">
                     {c.ports.map((p) => `${p.host_port}:${p.container_port}`).join(", ") || "—"}

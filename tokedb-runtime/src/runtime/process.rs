@@ -73,11 +73,11 @@ pub enum ProcessSignal {
     Kill,
 }
 
-/// A spawned container process. The container runs as the first process of a
-/// fresh PID namespace (like `fork` + `unshare(CLONE_NEWPID)`), while the
-/// runtime process itself never leaves its own namespaces, so its threads
-/// (`std::thread::spawn`) keep working afterwards. An inner "helper" process
-/// is used to create the namespace and forward the container's exit status.
+
+
+
+
+
 #[cfg(target_os = "linux")]
 #[derive(Debug)]
 pub struct SpawnedProcess {
@@ -190,9 +190,9 @@ impl SpawnedProcess {
         Err(RuntimeError::UnsupportedPlatform("process signals"))
     }
 
-    /// Reaps the helper process and returns the container's exit status.
-    /// The helper is our direct child; it forwards the raw wait status of the
-    /// container process through `status_pipe`, then exits.
+    
+    
+    
     #[cfg(target_os = "linux")]
     fn reap_helper(&mut self, blocking: bool) -> Result<Option<ExitStatus>> {
         if self.helper_reaped {
@@ -262,8 +262,8 @@ impl Drop for SpawnedProcess {
         if self.helper_reaped {
             return;
         }
-        // Don't leave the container running if the owner is dropped without
-        // waiting: force it down and reap the helper.
+        
+        
         let _ = self.reap_helper(false);
         if !self.helper_reaped {
             let _ = self.signal(ProcessSignal::Kill);
@@ -332,7 +332,7 @@ mod linux_sys {
             command.current_dir(cwd);
         }
 
-        // stdio pipes created by us so the parent keeps the read ends.
+        
         let (stdout_r, stdout_w) = pipe2(true)?;
         let (stderr_r, stderr_w) = pipe2(true)?;
         command.stdout(unsafe { Stdio::from_raw_fd(stdout_w) });
@@ -382,14 +382,14 @@ mod linux_sys {
             }
         }
 
-        // parent side: claim the pipe read ends and drop the status write end.
-        // The stdio write ends stay wrapped as OwnedFd inside `command` and
-        // close when it drops (manual close would double-close them).
+        
+        
+        
         unsafe {
             let _ = libc::close(status_w);
         }
 
-        // wait for the helper to report the container pid (blocking, ordered)
+        
         let mut pid_bytes = [0u8; 4];
         let mut total = 0usize;
         loop {
@@ -412,7 +412,7 @@ mod linux_sys {
                 }
                 return Err(RuntimeError::Process(format!("read(status pipe): {err}")));
             }
-            // EOF: the helper failed before reporting a pid. Reap and map.
+            
             let code = reap_helper_exit_code();
             return Err(match code {
                 125 => RuntimeError::Process("unshare(CLONE_NEWPID) failed in helper".to_string()),
@@ -469,11 +469,11 @@ mod linux_sys {
         }
     }
 
-    /// Runs inside the helper process (our direct child). Creates the PID
-    /// namespace, spawns the real container program as its first process,
-    /// reports the container pid, then reaps it and forwards the raw wait
-    /// status. Never returns; only async-signal-safe-friendly work happens
-    /// after `fork`.
+    
+    
+    
+    
+    
     unsafe fn helper_main(
         mut command: std::process::Command,
         status_w: i32,
@@ -483,7 +483,7 @@ mod linux_sys {
         if let Err(_err) = unshare(CloneFlags::CLONE_NEWPID) {
             unsafe { libc::_exit(125) };
         }
-        // Writing to stderr before closing it is fine (the fd is still valid).
+        
         let child = match command.spawn() {
             Ok(child) => child,
             Err(_) => unsafe { libc::_exit(126) },
@@ -492,10 +492,10 @@ mod linux_sys {
         if pid <= 0 {
             unsafe { libc::_exit(126) };
         }
-        // tell the parent the container pid
+        
         let pid_bytes = (pid as u32).to_ne_bytes();
         unsafe { libc::write(status_w, pid_bytes.as_ptr().cast(), 4) };
-        // drop our copies of the stdio write ends so EOF reaches the parent
+        
         unsafe { libc::close(stdout_w) };
         unsafe { libc::close(stderr_w) };
         loop {
@@ -508,8 +508,8 @@ mod linux_sys {
                 unsafe { libc::_exit(0) };
             }
             if waited < 0 {
-                // ECHILD: no more children; report success so the parent never
-                // hangs on the status pipe.
+                
+                
                 let stat_bytes = stat.to_ne_bytes();
                 unsafe { libc::write(status_w, stat_bytes.as_ptr().cast(), 4) };
                 unsafe { libc::close(status_w) };

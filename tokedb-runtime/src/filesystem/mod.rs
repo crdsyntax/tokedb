@@ -55,10 +55,10 @@ pub fn prepare_container_root(prep: &RootfsPrep) -> Result<()> {
     pivot::pivot_root(&prep.overlay.target)
 }
 
-/// Ensures a minimal, writable base filesystem exists inside the container
-/// rootfs so engines have the standard directories they expect (e.g. `/tmp`,
-/// `/run`). Entries are created on the writable overlay upper layer; if the
-/// image already provides them this is a no-op.
+
+
+
+
 #[cfg(target_os = "linux")]
 fn create_root_dirs(rootfs: &Path) -> Result<()> {
     for (rel, mode) in [("tmp", 0o1777), ("run", 0o755), ("var/run", 0o755)] {
@@ -77,11 +77,11 @@ fn create_root_dirs(rootfs: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Host `/etc` files that a container needs for basic OS functionality
-/// (user/group lookup, name resolution, DNS). These are copied into the
-/// container's `/etc` *only if the image does not already provide them*, so an
-/// image's own configuration (e.g. `/etc/mysql/my.cnf`) always takes
-/// precedence over the host's.
+
+
+
+
+
 #[cfg(target_os = "linux")]
 const HOST_ETC_SEED: &[&str] = &[
     "/etc/passwd",
@@ -93,9 +93,9 @@ const HOST_ETC_SEED: &[&str] = &[
     "/etc/ssl/certs",
 ];
 
-/// Copies the minimal host `/etc` base files into the container rootfs,
-/// skipping any path the image already supplies. Runs after the overlay is
-/// mounted, so the image's files win on conflict.
+
+
+
 #[cfg(target_os = "linux")]
 fn seed_host_etc(rootfs: &Path) -> Result<()> {
     let etc = rootfs.join("etc");
@@ -114,8 +114,8 @@ fn seed_host_etc(rootfs: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Recursive copy used by `seed_host_etc`. If `dst` already exists it is left
-/// untouched (so the image-provided file/dir is preserved).
+
+
 #[cfg(target_os = "linux")]
 fn copy_host_tree(src: &Path, dst: &Path) -> Result<()> {
     if dst.exists() {

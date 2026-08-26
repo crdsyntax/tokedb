@@ -38,6 +38,8 @@ impl ContainerStore {
             resources: spec.resources,
             volumes: spec.volumes,
             ports: spec.ports,
+            db_user: spec.db_user,
+            acquired_layers: Vec::new(),
             state: ContainerState::Created,
             created_at: now_unix_secs(),
             pid: None,
@@ -150,7 +152,7 @@ impl ContainerStore {
         Ok(containers)
     }
 
-    /// Looks up a container by its (unique) name.
+    
     pub fn find(&self, name: &str) -> Result<Container> {
         validate_component(name)?;
         self.list()?
@@ -216,6 +218,7 @@ mod tests {
             },
             volumes: Vec::new(),
             ports: Vec::new(),
+            db_user: crate::runtime::container::DbUser::default(),
         }
     }
 

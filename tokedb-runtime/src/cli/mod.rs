@@ -27,7 +27,7 @@ pub mod wsl;
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
-    /// Emit typed JSON DTOs instead of human-readable tables.
+    
     #[arg(long, global = true)]
     pub json: bool,
 }
@@ -46,7 +46,9 @@ pub enum Command {
     Logs(LogsArgs),
     Inspect(NameArgs),
     Destroy(NameArgs),
+    Stats(NameArgs),
     List,
+    Volumes(VolumeArgs),
 }
 
 #[derive(Debug, Args)]
@@ -116,6 +118,18 @@ pub struct CreateArgs {
         help = "append an argument to the engine startup command (repeatable)"
     )]
     pub args: Vec<String>,
+    #[arg(
+        long,
+        value_name = "NAME",
+        help = "database user to create (mandatory; used for remote access)"
+    )]
+    pub user: String,
+    #[arg(
+        long,
+        value_name = "PASSWORD",
+        help = "password for the database user (mandatory)"
+    )]
+    pub password: String,
 }
 
 #[derive(Debug, Args)]
@@ -125,12 +139,32 @@ pub struct LogsArgs {
     pub follow: bool,
 }
 
+#[derive(Debug, Args)]
+pub struct VolumeArgs {
+    #[command(subcommand)]
+    pub action: VolumeAction,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum VolumeAction {
+    List,
+    Create(NameArgs),
+    Remove(NameArgs),
+    Backup(BackupArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct BackupArgs {
+    pub name: String,
+    pub dest: PathBuf,
+}
+
 pub fn run(cli: Cli) -> Result<()> {
     #[cfg(windows)]
     {
-        // The Windows binary is a thin client: parse/validate locally (help,
-        // version and argument errors work natively), then forward the raw
-        // invocation to the Linux backend inside WSL2.
+        
+        
+        
         let _ = cli;
         wsl::run_via_wsl(&std::env::args().skip(1).collect::<Vec<_>>())
     }
@@ -217,22 +251,41 @@ fn run_with_config(config: RuntimeConfig, cli: Cli) -> Result<()> {
                 ports: args.port.clone(),
                 env,
                 args: args.args.clone(),
+                db_user: crate::service::DbUser {
+                    username: args.user.clone(),
+                    password: args.password.clone(),
+                },
             })?;
-            println!(
-                "created container `{}` (id {}) with data volume `{}-data`",
-                container.name, container.id, container.name
-            );
+            if cli.json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&container).map_err(RuntimeError::from)?
+                );
+            } else {
+                println!(
+                    "created container `{}` (id {}) with data volume `{}-data`",
+                    container.name, container.id, container.name
+                );
+            }
             Ok(())
         }
         Command::Start(args) => service.start(&args.name),
         Command::Stop(args) => service.stop(&args.name),
         Command::Logs(args) => {
-            if args.follow {
+            if cli.json {
+                let logs = service.read_logs(&args.name)?;
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&logs).map_err(RuntimeError::from)?
+                );
+                Ok(())
+            } else if args.follow {
                 follow_logs(&service, &args.name)?;
+                Ok(())
             } else {
                 service.logs(&args.name)?;
+                Ok(())
             }
-            Ok(())
         }
         Command::Inspect(args) => {
             let container = service.inspect(&args.name)?;
@@ -250,6 +303,63 @@ fn run_with_config(config: RuntimeConfig, cli: Cli) -> Result<()> {
             );
             Ok(())
         }
+        Command::Stats(args) => {
+            let usage = service.stats(&args.name)?;
+            if cli.json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&usage).map_err(RuntimeError::from)?
+                );
+            } else {
+                println!(
+                    "container `{}`: cpu={:.1}% mem={} bytes pids={}",
+                    args.name, usage.cpu_percent, usage.memory_bytes, usage.pids
+                );
+            }
+            Ok(())
+        }
+        Command::Volumes(args) => match &args.action {
+            VolumeAction::List => {
+                let volumes = service.volume_list()?;
+                if cli.json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&volumes).map_err(RuntimeError::from)?
+                    );
+                } else {
+                    for volume in &volumes {
+                        println!("{}  {}", volume.name, volume.path.display());
+                    }
+                }
+                Ok(())
+            }
+            VolumeAction::Create(a) => {
+                let volume = service.volume_create(&a.name)?;
+                if cli.json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&volume).map_err(RuntimeError::from)?
+                    );
+                } else {
+                    println!(
+                        "created volume `{}` at {}",
+                        volume.name,
+                        volume.path.display()
+                    );
+                }
+                Ok(())
+            }
+            VolumeAction::Remove(a) => {
+                service.volume_remove(&a.name)?;
+                println!("removed {}", a.name);
+                Ok(())
+            }
+            VolumeAction::Backup(a) => {
+                let path = service.volume_backup(&a.name, &a.dest)?;
+                println!("backed up {} -> {}", a.name, path.display());
+                Ok(())
+            }
+        },
         Command::List => {
             let containers = service.list()?;
             if cli.json {
@@ -298,9 +408,9 @@ pub(crate) fn arch_name(architecture: Architecture) -> &'static str {
     }
 }
 
-/// Streams a container's logs to the terminal, printing only the deltas between
-/// successive reads, until the process is interrupted (Ctrl+C). Reuses the same
-/// `read_logs` service used by the console's live tail.
+
+
+
 #[cfg(any(not(windows), test))]
 fn follow_logs(service: &RuntimeService, name: &str) -> Result<()> {
     use std::io::Write;
@@ -425,7 +535,7 @@ mod tests {
             vec!["tokedb", "export", "mariadb:11", "out.tar.gz"],
             vec!["tokedb", "images"],
             vec!["tokedb", "rmi", "mariadb:11"],
-            vec!["tokedb", "create", "mariadb-prod", "mariadb:11"],
+            vec!["tokedb", "create", "mariadb-prod", "mariadb:11", "--user", "u", "--password", "p"],
             vec![
                 "tokedb",
                 "create",
@@ -441,6 +551,10 @@ mod tests {
                 "3306",
                 "--port",
                 "33060",
+                "--user",
+                "u",
+                "--password",
+                "p",
             ],
             vec!["tokedb", "start", "mariadb-prod"],
             vec!["tokedb", "stop", "mariadb-prod"],
@@ -508,7 +622,17 @@ mod tests {
 
     #[test]
     fn run_create_rejects_missing_image() {
-        let cli = Cli::try_parse_from(["tokedb", "create", "x", "mariadb:11"]).unwrap();
+        let cli = Cli::try_parse_from([
+            "tokedb",
+            "create",
+            "x",
+            "mariadb:11",
+            "--user",
+            "u",
+            "--password",
+            "p",
+        ])
+        .unwrap();
         let temp = tempfile::tempdir().unwrap();
         let err = run_with_config(RuntimeConfig::new(temp.path().to_path_buf()), cli).unwrap_err();
         assert!(matches!(err, RuntimeError::ImageNotFound { .. }));
@@ -516,7 +640,17 @@ mod tests {
 
     #[test]
     fn run_rejects_unsafe_names() {
-        let cli = Cli::try_parse_from(["tokedb", "create", "a/b", "mariadb:11"]).unwrap();
+        let cli = Cli::try_parse_from([
+            "tokedb",
+            "create",
+            "a/b",
+            "mariadb:11",
+            "--user",
+            "u",
+            "--password",
+            "p",
+        ])
+        .unwrap();
         let temp = tempfile::tempdir().unwrap();
         let err = run_with_config(RuntimeConfig::new(temp.path().to_path_buf()), cli).unwrap_err();
         assert!(matches!(err, RuntimeError::InvalidName { .. }));
@@ -544,6 +678,10 @@ mod tests {
                 "256",
                 "--port",
                 "18080:3306",
+                "--user",
+                "root",
+                "--password",
+                "pw",
             ],
         )
         .unwrap();
@@ -590,6 +728,10 @@ mod tests {
                 "mariadb:11.4",
                 "--port",
                 "banana",
+                "--user",
+                "root",
+                "--password",
+                "pw",
             ],
         )
         .unwrap_err();
@@ -607,7 +749,7 @@ mod tests {
             &["tokedb", "import", bundle_path.to_str().unwrap()],
         )
         .unwrap();
-        run_cli(temp.path(), &["tokedb", "create", "testdb", "mariadb:11.4"]).unwrap();
+        run_cli(temp.path(), &["tokedb", "create", "testdb", "mariadb:11.4", "--user", "root", "--password", "pw"]).unwrap();
 
         let err = run_cli(temp.path(), &["tokedb", "start", "testdb"]).unwrap_err();
         assert!(matches!(err, RuntimeError::UnsupportedPlatform(_)));
@@ -719,5 +861,38 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(err, RuntimeError::InvalidConfig(_)));
+    }
+
+    #[test]
+    fn run_rmi_rejects_image_in_use_by_container() {
+        let temp = tempfile::tempdir().unwrap();
+
+        let (_manifest_path, bundle_path) = test_bundle(temp.path());
+        run_cli(
+            temp.path(),
+            &["tokedb", "import", bundle_path.to_str().unwrap()],
+        )
+        .unwrap();
+
+        run_cli(
+            temp.path(),
+            &[
+                "tokedb",
+                "create",
+                "testdb",
+                "mariadb:11.4",
+                "--user",
+                "root",
+                "--password",
+                "pw",
+            ],
+        )
+        .unwrap();
+
+        let err = run_cli(temp.path(), &["tokedb", "rmi", "mariadb:11.4"]).unwrap_err();
+        assert!(matches!(err, RuntimeError::ImageInUse { .. }));
+
+        run_cli(temp.path(), &["tokedb", "destroy", "testdb"]).unwrap();
+        run_cli(temp.path(), &["tokedb", "rmi", "mariadb:11.4"]).unwrap();
     }
 }

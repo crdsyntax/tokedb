@@ -82,9 +82,9 @@ fn cstr(name: &str) -> Vec<u8> {
 
 fn ifinfomsg_index(index: i32, flags: u32, change: u32) -> Vec<u8> {
     let mut msg = Vec::with_capacity(IFINFOMSG_LEN);
-    msg.push(0); // family: AF_UNSPEC
-    msg.push(0); // pad
-    msg.extend_from_slice(&0u16.to_ne_bytes()); // ifi_type
+    msg.push(0); 
+    msg.push(0); 
+    msg.extend_from_slice(&0u16.to_ne_bytes()); 
     msg.extend_from_slice(&index.to_ne_bytes());
     msg.extend_from_slice(&flags.to_ne_bytes());
     msg.extend_from_slice(&change.to_ne_bytes());
@@ -99,8 +99,8 @@ fn ifaddrmsg(family: u8, prefixlen: u8, index: u32) -> Vec<u8> {
     let mut msg = Vec::with_capacity(IFADDRMSG_LEN);
     msg.push(family);
     msg.push(prefixlen);
-    msg.push(0); // flags
-    msg.push(0); // scope: RT_SCOPE_UNIVERSE
+    msg.push(0); 
+    msg.push(0); 
     msg.extend_from_slice(&index.to_ne_bytes());
     msg
 }
@@ -111,7 +111,7 @@ fn build_message(nl_type: u16, flags: u16, seq: u32, payload: &[u8]) -> Vec<u8> 
     msg.extend_from_slice(&nl_type.to_ne_bytes());
     msg.extend_from_slice(&flags.to_ne_bytes());
     msg.extend_from_slice(&seq.to_ne_bytes());
-    msg.extend_from_slice(&0u32.to_ne_bytes()); // nl_pid
+    msg.extend_from_slice(&0u32.to_ne_bytes()); 
     msg.extend_from_slice(payload);
     pad4(&mut msg);
     msg

@@ -5,10 +5,13 @@ use crate::error::{Result, RuntimeError};
 use crate::image::registry::{LocalImageRef, LocalRegistry, Registry, RemoteRegistry};
 use crate::image::{Image, ImageStore, ImageSummary};
 use crate::runtime::{
-    run, Container, ContainerLogs, ContainerSpec, ContainerStore, ResourceLimits, VolumeMount,
+    metrics, run, Container, ContainerLogs, ContainerSpec, ContainerState, ContainerStore,
+    ResourceLimits, ResourceUsage, VolumeMount,
 };
+
+pub use crate::runtime::container::DbUser;
 use crate::state::{validate_component, StateLayout};
-use crate::storage::{backup_volume, Volume, VolumeStore};
+use crate::storage::{backup_volume, LayerStore, Volume, VolumeStore};
 
 #[derive(Debug, Clone, Default)]
 pub struct CreateRequest {
@@ -18,6 +21,9 @@ pub struct CreateRequest {
     pub ports: Vec<String>,
     pub env: Vec<(String, String)>,
     pub args: Vec<String>,
+    
+    
+    pub db_user: DbUser,
 }
 
 #[derive(Clone)]
@@ -48,6 +54,10 @@ impl RuntimeService {
 
     fn layout(&self) -> StateLayout {
         StateLayout::new(self.config.clone())
+    }
+
+    fn layer_store(&self) -> LayerStore {
+        LayerStore::new(self.config.layers_dir.clone())
     }
 
     pub fn pull(&self, reference: &str, registry: Option<&str>) -> Result<Image> {
@@ -92,12 +102,27 @@ impl RuntimeService {
 
     pub fn remove_image(&self, reference: &str) -> Result<()> {
         validate_component(reference)?;
+        let containers = self.containers();
+        for container in containers.list()? {
+            if container.image == reference {
+                return Err(RuntimeError::ImageInUse {
+                    reference: reference.to_string(),
+                });
+            }
+        }
         self.store().remove(reference)
     }
 
     pub fn create(&self, request: &CreateRequest) -> Result<Container> {
         validate_component(&request.name)?;
         validate_component(&request.image)?;
+
+        let db_user = request.db_user.clone();
+        if db_user.username.trim().is_empty() || db_user.password.is_empty() {
+            return Err(RuntimeError::InvalidConfig(
+                "el usuario y la contraseña de la base de datos son obligatorios al crear el contenedor".into(),
+            ));
+        }
 
         let image = self.store().get(&request.image)?;
 
@@ -124,6 +149,7 @@ impl RuntimeService {
                 mount_path: image.manifest.data_directory.clone(),
             }],
             ports,
+            db_user,
         })?;
 
         if let Err(err) = self.volumes().create(&volume_name) {
@@ -139,6 +165,7 @@ impl RuntimeService {
             &self.containers(),
             &self.store(),
             &self.volumes(),
+            &self.layer_store(),
             &self.layout(),
             name,
         )
@@ -168,11 +195,27 @@ impl RuntimeService {
         validate_component(name)?;
         let containers = self.containers();
         let container = containers.find(name)?;
+        let layers = self.layer_store();
+        for digest in &container.acquired_layers {
+            layers.release(digest)?;
+        }
         containers.remove(&container.id)
     }
 
     pub fn list(&self) -> Result<Vec<Container>> {
         self.containers().list()
+    }
+
+    pub fn stats(&self, name: &str) -> Result<ResourceUsage> {
+        validate_component(name)?;
+        let container = self.containers().find(name)?;
+        let memory_limit = container.resources.memory_bytes;
+        match container.pid {
+            Some(pid) if container.state == ContainerState::Running => {
+                Ok(metrics::collect_usage(pid, memory_limit))
+            }
+            _ => Ok(ResourceUsage::default()),
+        }
     }
 
     pub fn volume_list(&self) -> Result<Vec<Volume>> {

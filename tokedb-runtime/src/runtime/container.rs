@@ -3,6 +3,14 @@ use serde::{Deserialize, Serialize};
 use crate::runtime::lifecycle::ContainerState;
 use crate::runtime::process::CommandSpec;
 
+
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DbUser {
+    pub username: String,
+    pub password: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Container {
     pub id: String,
@@ -12,6 +20,14 @@ pub struct Container {
     pub resources: ResourceLimits,
     pub volumes: Vec<VolumeMount>,
     pub ports: Vec<PortBinding>,
+    #[serde(default)]
+    pub db_user: DbUser,
+    
+    
+    
+    
+    #[serde(default)]
+    pub acquired_layers: Vec<String>,
     pub state: ContainerState,
     pub created_at: u64,
     pub pid: Option<u32>,
@@ -25,6 +41,7 @@ pub struct ContainerSpec {
     pub resources: ResourceLimits,
     pub volumes: Vec<VolumeMount>,
     pub ports: Vec<PortBinding>,
+    pub db_user: DbUser,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]

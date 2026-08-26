@@ -48,6 +48,13 @@ export interface ContainerLogs {
   stderr: string;
 }
 
+export interface ResourceUsage {
+  cpu_percent: number;
+  memory_bytes: number;
+  memory_limit_bytes: number | null;
+  pids: number;
+}
+
 export interface ImageSummary {
   reference: string;
   database: string;

@@ -143,9 +143,18 @@ async fn proxy_tcp(map: PortMap, container_ip: Ipv4Addr) {
     use tokio::net::TcpListener;
 
     let listener = match TcpListener::bind(("0.0.0.0", map.host_port)).await {
-        Ok(listener) => listener,
+        Ok(listener) => {
+            eprintln!(
+                "tcp proxy listening on 0.0.0.0:{} -> {}:{}",
+                map.host_port, container_ip, map.container_port
+            );
+            listener
+        }
         Err(err) => {
-            tracing::error!(host_port = map.host_port, error = %err, "tcp proxy bind failed");
+            eprintln!(
+                "tcp proxy bind FAILED on 0.0.0.0:{} -> {err}",
+                map.host_port
+            );
             return;
         }
     };
